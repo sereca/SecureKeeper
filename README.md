@@ -1,6 +1,8 @@
 # SecureKeeper
 Secure ZooKeeper using Intel SGX
 
+Publication available at: http://dl.acm.org/citation.cfm?id=2988350
+
 This README assumes, that the symbolic link 'zookeeper' directs 
 to 'zookeeper-3.5.1-alpha'.
 Everything from now on is done within the 'zookeeper' directory.
