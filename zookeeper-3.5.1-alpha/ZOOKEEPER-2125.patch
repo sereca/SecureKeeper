@@ -1,0 +1,1688 @@
+diff --git build.xml build.xml
+index e4c8e03..8aa7137 100644
+--- build.xml
++++ build.xml
+@@ -77,6 +77,7 @@ xmlns:maven="antlib:org.apache.maven.artifact.ant">
+     <property name="test.data.dir" value="${test.java.build.dir}/data" />
+     <property name="test.data.invalid.dir" value="${test.data.dir}/invalidsnap" />
+     <property name="test.data.buffersize.dir" value="${test.data.dir}/buffersize" />
++    <property name="test.data.ssl.dir" value="${test.data.dir}/ssl" />
+     <property name="test.cppunit.dir" value="${test.java.build.dir}/test-cppunit"/>
+     <property name="test.tmp.dir" value="${test.java.build.dir}/tmp" />
+     <property name="test.output" value="no" />
+@@ -1260,6 +1261,7 @@ xmlns:maven="antlib:org.apache.maven.artifact.ant">
+         <delete dir="${test.tmp.dir}" />
+         <delete dir="${test.data.invalid.dir}" />
+         <delete dir="${test.data.buffersize.dir}" />
++        <delete dir="${test.data.ssl.dir}" />
+         <delete dir="${test.data.dir}" />
+         <mkdir dir="${test.log.dir}" />
+         <mkdir dir="${test.tmp.dir}" />
+@@ -1272,6 +1274,10 @@ xmlns:maven="antlib:org.apache.maven.artifact.ant">
+         <copy todir="${test.data.buffersize.dir}">
+             <fileset dir="${basedir}/src/java/test/data/buffersize"/>
+         </copy>
++        <mkdir dir="${test.data.ssl.dir}" />
++        <copy todir="${test.data.ssl.dir}">
++            <fileset dir="${basedir}/src/java/test/data/ssl"/>
++        </copy>
+     </target>
+ 
+     <condition property="quicktest">
+@@ -1643,6 +1649,7 @@ xmlns:maven="antlib:org.apache.maven.artifact.ant">
+           <exclude name="**/missing"/>
+           <exclude name="**/wrappers*.opt"/>
+           <exclude name="CHANGES.txt"/>
++          <exclude name="**/README.md"/>
+           <exclude name="README_packaging.txt"/>
+           <exclude name="**/TODO"/>
+           <exclude name="**/VERSION"/>
+diff --git src/docs/src/documentation/content/xdocs/zookeeperAdmin.xml src/docs/src/documentation/content/xdocs/zookeeperAdmin.xml
+index 5f105c5..c12c2ca 100644
+--- src/docs/src/documentation/content/xdocs/zookeeperAdmin.xml
++++ src/docs/src/documentation/content/xdocs/zookeeperAdmin.xml
+@@ -614,6 +614,22 @@ server.3=zoo3:2888:3888</programlisting>
+             </listitem>
+           </varlistentry>
+ 
++          <varlistentry>
++            <term>secureClientPort</term>
++
++            <listitem>
++              <para>the port to listen on for secure client connections using SSL.
++
++              <emphasis role="bold">clientPort</emphasis> specifies
++                the port for plaintext connections while <emphasis role="bold">
++                  secureClientPort</emphasis> specifies the port for SSL
++                connections. Specifying both enables mixed-mode while omitting
++                either will disable that mode.</para>
++              <para>Note that SSL feature will be enabled when user plugs-in
++                zookeeper.serverCnxnFactory, zookeeper.clientCnxnSocket as Netty.</para>
++            </listitem>
++          </varlistentry>
++
+           <varlistentry id="var_datadir">
+             <term>dataDir</term>
+ 
+@@ -1035,10 +1051,10 @@ server.3=zoo3:2888:3888</programlisting>
+       </section>
+ 
+       <section id="sc_authOptions">
+-        <title>Authentication &amp; Authorization Options</title>
++        <title>Encryption, Authentication, Authorization Options</title>
+ 
+         <para>The options in this section allow control over
+-        authentication/authorization performed by the service.</para>
++        encryption/authentication/authorization performed by the service.</para>
+ 
+         <variablelist>
+           <varlistentry>
+@@ -1072,6 +1088,44 @@ server.3=zoo3:2888:3888</programlisting>
+               connection.</para>
+             </listitem>
+           </varlistentry>
++
++          <varlistentry>
++            <term>zookeeper.client.secure</term>
++            <listitem>
++              <para>If you want to connect to server's secure client port, you need to
++                set this property to <emphasis role="bold">true</emphasis> on client.
++                This will connect to server using SSL with specified credentials. Note that
++                you also need to plug-in Netty client.
++              </para>
++            </listitem>
++          </varlistentry>
++
++          <varlistentry>
++            <term>ssl.keyStore.location and ssl.keyStore.password</term>
++            <listitem>
++              <para>(Java system properties: <emphasis role="bold">
++                zookeeper.ssl.keyStore.location</emphasis> and <emphasis
++                      role="bold">zookeeper.ssl.keyStore.password</emphasis>)</para>
++
++              <para>Specifies the file path to a JKS containing the local
++                credentials to be used for SSL connections, and the
++                password to unlock the file.</para>
++            </listitem>
++          </varlistentry>
++
++          <varlistentry>
++            <term>ssl.trustStore.location and ssl.trustStore.password</term>
++            <listitem>
++              <para>(Java system properties: <emphasis role="bold">
++                zookeeper.ssl.trustStore.location</emphasis> and <emphasis
++                      role="bold">zookeeper.ssl.trustStore.password</emphasis>)</para>
++
++              <para>Specifies the file path to a JKS containing the remote
++                credentials to be used for SSL connections, and the
++                password to unlock the file.</para>
++            </listitem>
++          </varlistentry>
++
+         </variablelist>
+       </section>
+ 
+diff --git src/java/main/org/apache/zookeeper/ClientCnxnSocketNetty.java src/java/main/org/apache/zookeeper/ClientCnxnSocketNetty.java
+index 81731dd..43af080 100644
+--- src/java/main/org/apache/zookeeper/ClientCnxnSocketNetty.java
++++ src/java/main/org/apache/zookeeper/ClientCnxnSocketNetty.java
+@@ -20,6 +20,7 @@
+ 
+ import org.apache.zookeeper.ClientCnxn.EndOfStreamException;
+ import org.apache.zookeeper.ClientCnxn.Packet;
++import org.apache.zookeeper.common.X509Util;
+ import org.jboss.netty.bootstrap.ClientBootstrap;
+ import org.jboss.netty.buffer.ChannelBuffer;
+ import org.jboss.netty.buffer.ChannelBuffers;
+@@ -36,9 +37,12 @@
+ import org.jboss.netty.channel.MessageEvent;
+ import org.jboss.netty.channel.SimpleChannelUpstreamHandler;
+ import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
++import org.jboss.netty.handler.ssl.SslHandler;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ 
++import javax.net.ssl.SSLContext;
++import javax.net.ssl.SSLEngine;
+ import java.io.IOException;
+ import java.net.InetSocketAddress;
+ import java.net.SocketAddress;
+@@ -52,6 +56,8 @@
+ import java.util.concurrent.locks.Lock;
+ import java.util.concurrent.locks.ReentrantLock;
+ 
++import static org.apache.zookeeper.common.X509Exception.SSLContextException;
++
+ /**
+  * ClientCnxnSocketNetty implements ClientCnxnSocket abstract methods.
+  * It's responsible for connecting to server, reading/writing network traffic and
+@@ -82,7 +88,7 @@
+      * - - cleanup()
+      * close()
+      * <p/>
+-     * Other none lifecycle methods are in jeopardy getting a null channel
++     * Other non-lifecycle methods are in jeopardy getting a null channel
+      * when calling in concurrency. We must handle it.
+      */
+ 
+@@ -332,13 +338,30 @@ public static Packet getInstance() {
+      * connection implementation.
+      */
+     private class ZKClientPipelineFactory implements ChannelPipelineFactory {
++        private SSLContext sslContext = null;
++        private SSLEngine sslEngine = null;
++
+         @Override
+         public ChannelPipeline getPipeline() throws Exception {
+             ChannelPipeline pipeline = Channels.pipeline();
+-            // add ssl here
++            if (Boolean.getBoolean(ZooKeeper.SECURE_CLIENT)) {
++                initSSL(pipeline);
++            }
+             pipeline.addLast("handler", new ZKClientHandler());
+             return pipeline;
+         }
++
++        // The synchronized is to prevent the race on shared variable "sslEngine".
++        // Basically we only need to create it once.
++        private synchronized void initSSL(ChannelPipeline pipeline) throws SSLContextException {
++            if (sslContext == null || sslEngine == null) {
++                sslContext = X509Util.createSSLContext();
++                sslEngine = sslContext.createSSLEngine();
++                sslEngine.setUseClientMode(true);
++            }
++            pipeline.addLast("ssl", new SslHandler(sslEngine));
++            LOG.info("SSL handler added for channel: {}", pipeline.getChannel());
++        }
+     }
+ 
+     /**
+diff --git src/java/main/org/apache/zookeeper/ZooKeeper.java src/java/main/org/apache/zookeeper/ZooKeeper.java
+index c9f0f9a..dd8ecf4 100644
+--- src/java/main/org/apache/zookeeper/ZooKeeper.java
++++ src/java/main/org/apache/zookeeper/ZooKeeper.java
+@@ -131,6 +131,8 @@
+ public class ZooKeeper {
+ 
+     public static final String ZOOKEEPER_CLIENT_CNXN_SOCKET = "zookeeper.clientCnxnSocket";
++    // Setting this to "true" will enable encrypted client-server communication.
++    public static final String SECURE_CLIENT = "zookeeper.client.secure";
+ 
+     protected final ClientCnxn cnxn;
+     private static final Logger LOG;
+diff --git src/java/main/org/apache/zookeeper/common/X509Exception.java src/java/main/org/apache/zookeeper/common/X509Exception.java
+new file mode 100644
+index 0000000..984a2ab
+--- /dev/null
++++ src/java/main/org/apache/zookeeper/common/X509Exception.java
+@@ -0,0 +1,67 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.zookeeper.common;
++
++@SuppressWarnings("serial")
++public class X509Exception extends Exception {
++    public X509Exception(String message) {
++        super(message);
++    }
++
++    public X509Exception(Throwable cause) {
++        super(cause);
++    }
++
++    public X509Exception(String message, Throwable cause) {
++        super(message, cause);
++    }
++
++    public static class KeyManagerException extends X509Exception {
++        public KeyManagerException(String message) {
++            super(message);
++        }
++
++        public KeyManagerException(Throwable cause) {
++            super(cause);
++        }
++    }
++
++    public static class TrustManagerException extends X509Exception {
++        public TrustManagerException(String message) {
++            super(message);
++        }
++
++        public TrustManagerException(Throwable cause) {
++            super(cause);
++        }
++    }
++
++    public static class SSLContextException extends X509Exception {
++        public SSLContextException(String message) {
++            super(message);
++        }
++
++        public SSLContextException(Throwable cause) {
++            super(cause);
++        }
++
++        public SSLContextException(String message, Throwable cause) {
++            super(message, cause);
++        }
++    }
++}
+diff --git src/java/main/org/apache/zookeeper/common/X509Util.java src/java/main/org/apache/zookeeper/common/X509Util.java
+new file mode 100644
+index 0000000..2948448
+--- /dev/null
++++ src/java/main/org/apache/zookeeper/common/X509Util.java
+@@ -0,0 +1,166 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.zookeeper.common;
++
++
++import javax.net.ssl.KeyManager;
++import javax.net.ssl.KeyManagerFactory;
++import javax.net.ssl.SSLContext;
++import javax.net.ssl.TrustManager;
++import javax.net.ssl.TrustManagerFactory;
++import javax.net.ssl.X509KeyManager;
++import javax.net.ssl.X509TrustManager;
++import java.io.File;
++import java.io.FileInputStream;
++import java.io.IOException;
++import java.security.KeyStore;
++
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
++import static org.apache.zookeeper.common.X509Exception.KeyManagerException;
++import static org.apache.zookeeper.common.X509Exception.SSLContextException;
++import static org.apache.zookeeper.common.X509Exception.TrustManagerException;
++
++/**
++ * Utility code for X509 handling
++ */
++public class X509Util {
++    private static final Logger LOG = LoggerFactory.getLogger(X509Util.class);
++
++    public static final String SSL_KEYSTORE_LOCATION = "zookeeper.ssl.keyStore.location";
++    public static final String SSL_KEYSTORE_PASSWD = "zookeeper.ssl.keyStore.password";
++    public static final String SSL_TRUSTSTORE_LOCATION = "zookeeper.ssl.trustStore.location";
++    public static final String SSL_TRUSTSTORE_PASSWD = "zookeeper.ssl.trustStore.password";
++
++    public static SSLContext createSSLContext() throws SSLContextException {
++        KeyManager[] keyManagers = null;
++        TrustManager[] trustManagers = null;
++
++        String keyStoreLocationProp = System.getProperty(SSL_KEYSTORE_LOCATION);
++        String keyStorePasswordProp = System.getProperty(SSL_KEYSTORE_PASSWD);
++
++        // There are legal states in some use cases for null KeyManager or TrustManager.
++        // But if a user wanna specify one, location and password are required.
++
++        if (keyStoreLocationProp == null && keyStorePasswordProp == null) {
++            LOG.warn("keystore not specified for client connection");
++        } else {
++            if (keyStoreLocationProp == null) {
++                throw new SSLContextException("keystore location not specified for client connection");
++            }
++            if (keyStorePasswordProp == null) {
++                throw new SSLContextException("keystore password not specified for client connection");
++            }
++            try {
++                keyManagers = new KeyManager[]{
++                        createKeyManager(keyStoreLocationProp, keyStorePasswordProp)};
++            } catch (KeyManagerException e) {
++                throw new SSLContextException("Failed to create KeyManager", e);
++            }
++        }
++
++        String trustStoreLocationProp = System.getProperty(SSL_TRUSTSTORE_LOCATION);
++        String trustStorePasswordProp = System.getProperty(SSL_TRUSTSTORE_PASSWD);
++
++        if (trustStoreLocationProp == null && trustStorePasswordProp == null) {
++            LOG.warn("keystore not specified for client connection");
++        } else {
++            if (trustStoreLocationProp == null) {
++                throw new SSLContextException("keystore location not specified for client connection");
++            }
++            if (trustStorePasswordProp == null) {
++                throw new SSLContextException("keystore password not specified for client connection");
++            }
++            try {
++                trustManagers = new TrustManager[]{
++                        createTrustManager(trustStoreLocationProp, trustStorePasswordProp)};
++            } catch (TrustManagerException e) {
++                throw new SSLContextException("Failed to create KeyManager", e);
++            }
++        }
++
++        SSLContext sslContext = null;
++        try {
++            sslContext = SSLContext.getInstance("TLSv1");
++            sslContext.init(keyManagers, trustManagers, null);
++        } catch (Exception e) {
++            throw new SSLContextException(e);
++        }
++        return sslContext;
++    }
++
++    public static X509KeyManager createKeyManager(String keyStoreLocation, String keyStorePassword)
++            throws KeyManagerException {
++        FileInputStream inputStream = null;
++        try {
++            char[] keyStorePasswordChars = keyStorePassword.toCharArray();
++            File keyStoreFile = new File(keyStoreLocation);
++            KeyStore ks = KeyStore.getInstance("JKS");
++            inputStream = new FileInputStream(keyStoreFile);
++            ks.load(inputStream, keyStorePasswordChars);
++            KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
++            kmf.init(ks, keyStorePasswordChars);
++
++            for (KeyManager km : kmf.getKeyManagers()) {
++                if (km instanceof X509KeyManager) {
++                    return (X509KeyManager) km;
++                }
++            }
++            throw new KeyManagerException("Couldn't find X509KeyManager");
++
++        } catch (Exception e) {
++            throw new KeyManagerException(e);
++        } finally {
++            if (inputStream != null) {
++                try {
++                    inputStream.close();
++                } catch (IOException e) {}
++            }
++        }
++    }
++
++    public static X509TrustManager createTrustManager(String trustStoreLocation, String trustStorePassword)
++            throws TrustManagerException {
++        FileInputStream inputStream = null;
++        try {
++            char[] trustStorePasswordChars = trustStorePassword.toCharArray();
++            File trustStoreFile = new File(trustStoreLocation);
++            KeyStore ts = KeyStore.getInstance("JKS");
++            inputStream = new FileInputStream(trustStoreFile);
++            ts.load(inputStream, trustStorePasswordChars);
++            TrustManagerFactory tmf = TrustManagerFactory.getInstance("SunX509");
++            tmf.init(ts);
++
++            for (TrustManager tm : tmf.getTrustManagers()) {
++                if (tm instanceof X509TrustManager) {
++                    return (X509TrustManager) tm;
++                }
++            }
++            throw new TrustManagerException("Couldn't find X509TrustManager");
++        } catch (Exception e) {
++            throw new TrustManagerException(e);
++        } finally {
++            if (inputStream != null) {
++                try {
++                    inputStream.close();
++                } catch (IOException e) {}
++            }
++        }
++    }
++}
+\ No newline at end of file
+diff --git src/java/main/org/apache/zookeeper/server/FinalRequestProcessor.java src/java/main/org/apache/zookeeper/server/FinalRequestProcessor.java
+index 04bcf72..7e3c29f 100644
+--- src/java/main/org/apache/zookeeper/server/FinalRequestProcessor.java
++++ src/java/main/org/apache/zookeeper/server/FinalRequestProcessor.java
+@@ -129,16 +129,17 @@ public void processRequest(Request request) {
+             }
+         }
+ 
+-        if (request.type == OpCode.closeSession) {
+-            ServerCnxnFactory scxn = zks.getServerCnxnFactory();
+-            // this might be possible since
+-            // we might just be playing diffs from the leader
+-            if (scxn != null && request.cnxn == null) {
+-                // calling this if we have the cnxn results in the client's
+-                // close session response being lost - we've already closed
+-                // the session/socket here before we can send the closeSession
+-                // in the switch block below
+-                scxn.closeSession(request.sessionId);
++        // ZOOKEEPER-558:
++        // In some cases the server does not close the connection (e.g., closeconn buffer
++        // was not being queued — ZOOKEEPER-558) properly. This happens, for example,
++        // when the client closes the connection. The server should still close the session, though.
++        // Calling closeSession() after losing the cnxn, results in the client close session response being dropped.
++        if (request.type == OpCode.closeSession && connClosedByClient(request)) {
++            // We need to check if we can close the session id.
++            // Sometimes the corresponding ServerCnxnFactory could be null because
++            // we are just playing diffs from the leader.
++            if (closeSession(zks.serverCnxnFactory, request.sessionId) ||
++                    closeSession(zks.secureServerCnxnFactory, request.sessionId)) {
+                 return;
+             }
+         }
+@@ -472,6 +473,17 @@ public void processRequest(Request request) {
+         }
+     }
+ 
++    private boolean closeSession(ServerCnxnFactory serverCnxnFactory, long sessionId) {
++        if (serverCnxnFactory == null) {
++            return false;
++        }
++        return serverCnxnFactory.closeSession(sessionId);
++    }
++
++    private boolean connClosedByClient(Request request) {
++        return request.cnxn == null;
++    }
++
+     public void shutdown() {
+         // we are the final link in the chain
+         LOG.info("shutdown of request processor complete");
+diff --git src/java/main/org/apache/zookeeper/server/NIOServerCnxnFactory.java src/java/main/org/apache/zookeeper/server/NIOServerCnxnFactory.java
+index acabb33..b4741d7 100644
+--- src/java/main/org/apache/zookeeper/server/NIOServerCnxnFactory.java
++++ src/java/main/org/apache/zookeeper/server/NIOServerCnxnFactory.java
+@@ -639,7 +639,10 @@ public NIOServerCnxnFactory() {
+         new HashSet<SelectorThread>();
+ 
+     @Override
+-    public void configure(InetSocketAddress addr, int maxcc) throws IOException {
++    public void configure(InetSocketAddress addr, int maxcc, boolean secure) throws IOException {
++        if (secure) {
++            throw new UnsupportedOperationException("SSL isn't supported in NIOServerCnxn");
++        }
+         configureSaslLogin();
+ 
+         maxClientCnxns = maxcc;
+@@ -742,12 +745,14 @@ public void start() {
+     }
+ 
+     @Override
+-    public void startup(ZooKeeperServer zks) throws IOException,
+-            InterruptedException {
++    public void startup(ZooKeeperServer zks, boolean startServer)
++            throws IOException, InterruptedException {
+         start();
+         setZooKeeperServer(zks);
+-        zks.startdata();
+-        zks.startup();
++        if (startServer) {
++            zks.startdata();
++            zks.startup();
++        }
+     }
+ 
+     @Override
+@@ -908,11 +913,13 @@ public void addSession(long sessionId, NIOServerCnxn cnxn) {
+     }
+ 
+     @Override
+-    public void closeSession(long sessionId) {
++    public boolean closeSession(long sessionId) {
+         NIOServerCnxn cnxn = sessionMap.remove(sessionId);
+         if (cnxn != null) {
+             cnxn.close();
++            return true;
+         }
++        return false;
+     }
+ 
+     @Override
+diff --git src/java/main/org/apache/zookeeper/server/NettyServerCnxnFactory.java src/java/main/org/apache/zookeeper/server/NettyServerCnxnFactory.java
+index 09a7948..77cb3c5 100644
+--- src/java/main/org/apache/zookeeper/server/NettyServerCnxnFactory.java
++++ src/java/main/org/apache/zookeeper/server/NettyServerCnxnFactory.java
+@@ -18,6 +18,7 @@
+ 
+ package org.apache.zookeeper.server;
+ 
++import static org.apache.zookeeper.common.X509Exception.SSLContextException;
+ import static org.jboss.netty.buffer.ChannelBuffers.dynamicBuffer;
+ 
+ import java.io.IOException;
+@@ -28,7 +29,10 @@
+ import java.util.Map;
+ import java.util.Set;
+ import java.util.concurrent.Executors;
++import javax.net.ssl.SSLContext;
++import javax.net.ssl.SSLEngine;
+ 
++import org.apache.zookeeper.common.X509Util;
+ import org.jboss.netty.bootstrap.ServerBootstrap;
+ import org.jboss.netty.buffer.ChannelBuffer;
+ import org.jboss.netty.buffer.ChannelBuffers;
+@@ -46,6 +50,7 @@
+ import org.jboss.netty.channel.group.ChannelGroup;
+ import org.jboss.netty.channel.group.DefaultChannelGroup;
+ import org.jboss.netty.channel.socket.nio.NioServerSocketChannelFactory;
++import org.jboss.netty.handler.ssl.SslHandler;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ 
+@@ -59,7 +64,7 @@
+         new HashMap<InetAddress, Set<NettyServerCnxn>>( );
+     InetSocketAddress localAddress;
+     int maxClientCnxns = 60;
+-    
++
+     /**
+      * This is an inner class since we need to extend SimpleChannelHandler, but
+      * NettyServerCnxnFactory already extends ServerCnxnFactory. By making it inner
+@@ -241,7 +246,7 @@ public void writeComplete(ChannelHandlerContext ctx,
+                 LOG.trace("write complete " + e);
+             }
+         }
+-        
++
+     }
+     
+     CnxnChannelHandler channelHandler = new CnxnChannelHandler();
+@@ -261,13 +266,26 @@ public void writeComplete(ChannelHandlerContext ctx,
+             @Override
+             public ChannelPipeline getPipeline() throws Exception {
+                 ChannelPipeline p = Channels.pipeline();
++                if (secure) {
++                    initSSL(p);
++                }
+                 p.addLast("servercnxnfactory", channelHandler);
+ 
+                 return p;
+             }
+         });
+     }
+-    
++
++    private synchronized void initSSL(ChannelPipeline p) throws SSLContextException {
++        SSLContext sslContext = X509Util.createSSLContext();
++        SSLEngine sslEngine = sslContext.createSSLEngine();
++        sslEngine.setUseClientMode(false);
++        sslEngine.setNeedClientAuth(true);
++
++        p.addLast("ssl", new SslHandler(sslEngine));
++        LOG.info("SSL handler added for channel: {}", p.getChannel());
++    }
++
+     @Override
+     public void closeAll() {
+         if (LOG.isDebugEnabled()) {
+@@ -291,7 +309,7 @@ public void closeAll() {
+     }
+ 
+     @Override
+-    public void closeSession(long sessionId) {
++    public boolean closeSession(long sessionId) {
+         if (LOG.isDebugEnabled()) {
+             LOG.debug("closeSession sessionid:0x" + sessionId);
+         }
+@@ -302,18 +320,20 @@ public void closeSession(long sessionId) {
+                 } catch (Exception e) {
+                     LOG.warn("exception during session close", e);
+                 }
+-                break;
++                return true;
+             }
+         }
++        return false;
+     }
+ 
+     @Override
+-    public void configure(InetSocketAddress addr, int maxClientCnxns)
++    public void configure(InetSocketAddress addr, int maxClientCnxns, boolean secure)
+             throws IOException
+     {
+         configureSaslLogin();
+         localAddress = addr;
+         this.maxClientCnxns = maxClientCnxns;
++        this.secure = secure;
+     }
+ 
+     /** {@inheritDoc} */
+@@ -380,12 +400,14 @@ public void reconfigure(InetSocketAddress addr)
+     }
+     
+     @Override
+-    public void startup(ZooKeeperServer zks) throws IOException,
+-            InterruptedException {
++    public void startup(ZooKeeperServer zks, boolean startServer)
++            throws IOException, InterruptedException {
+         start();
+         setZooKeeperServer(zks);
+-        zks.startdata();
+-        zks.startup();
++        if (startServer) {
++            zks.startdata();
++            zks.startup();
++        }
+     }
+ 
+     @Override
+diff --git src/java/main/org/apache/zookeeper/server/ServerCnxnFactory.java src/java/main/org/apache/zookeeper/server/ServerCnxnFactory.java
+index 1403772..b08fd0d 100644
+--- src/java/main/org/apache/zookeeper/server/ServerCnxnFactory.java
++++ src/java/main/org/apache/zookeeper/server/ServerCnxnFactory.java
+@@ -23,7 +23,6 @@
+ import java.nio.ByteBuffer;
+ import java.util.Collections;
+ import java.util.Set;
+-import java.util.HashSet;
+ import java.util.Map;
+ import java.util.concurrent.ConcurrentHashMap;
+ 
+@@ -43,13 +42,12 @@
+ public abstract class ServerCnxnFactory {
+ 
+     public static final String ZOOKEEPER_SERVER_CNXN_FACTORY = "zookeeper.serverCnxnFactory";
+-
+-    public interface PacketProcessor {
+-        public void processPacket(ByteBuffer packet, ServerCnxn src);
+-    }
+     
+     private static final Logger LOG = LoggerFactory.getLogger(ServerCnxnFactory.class);
+ 
++    // Tells whether SSL is enabled on this ServerCnxnFactory
++    protected boolean secure;
++
+     /**
+      * The buffer will cause the connection to be close when we do a send.
+      */
+@@ -67,11 +65,19 @@ public ZooKeeperServer getZooKeeperServer() {
+         return zkServer;
+     }
+ 
+-    public abstract void closeSession(long sessionId);
++    /**
++     * @return true if the cnxn that contains the sessionId exists in this ServerCnxnFactory
++     *         and it's closed. Otherwise false.
++     */
++    public abstract boolean closeSession(long sessionId);
++
++    public void configure(InetSocketAddress addr, int maxcc) throws IOException {
++        configure(addr, maxcc, false);
++    }
++
++    public abstract void configure(InetSocketAddress addr, int maxcc, boolean secure)
++            throws IOException;
+ 
+-    public abstract void configure(InetSocketAddress addr,
+-                                   int maxClientCnxns) throws IOException;
+-    
+     public abstract void reconfigure(InetSocketAddress addr);
+     
+     
+@@ -84,8 +90,14 @@ public abstract void configure(InetSocketAddress addr,
+     /** Maximum number of connections allowed from particular host (ip) */
+     public abstract void setMaxClientCnxnsPerHost(int max);
+ 
+-    public abstract void startup(ZooKeeperServer zkServer)
+-        throws IOException, InterruptedException;
++    public void startup(ZooKeeperServer zkServer) throws IOException, InterruptedException {
++        startup(zkServer, true);
++    }
++
++    // This method is to maintain compatiblity of startup(zks) and enable sharing of zks
++    // when we add secureCnxnFactory.
++    public abstract void startup(ZooKeeperServer zkServer, boolean startServer)
++            throws IOException, InterruptedException;
+ 
+     public abstract void join() throws InterruptedException;
+ 
+@@ -94,10 +106,14 @@ public abstract void startup(ZooKeeperServer zkServer)
+     public abstract void start();
+ 
+     protected ZooKeeperServer zkServer;
+-    final public void setZooKeeperServer(ZooKeeperServer zk) {
+-        this.zkServer = zk;
+-        if (zk != null) {
+-            zk.setServerCnxnFactory(this);
++    final public void setZooKeeperServer(ZooKeeperServer zks) {
++        this.zkServer = zks;
++        if (zks != null) {
++            if (secure) {
++                zks.setSecureServerCnxnFactory(this);
++            } else {
++                zks.setServerCnxnFactory(this);
++            }
+         }
+     }
+ 
+diff --git src/java/main/org/apache/zookeeper/server/ServerConfig.java src/java/main/org/apache/zookeeper/server/ServerConfig.java
+index f2b8463..d4c32a1 100644
+--- src/java/main/org/apache/zookeeper/server/ServerConfig.java
++++ src/java/main/org/apache/zookeeper/server/ServerConfig.java
+@@ -37,6 +37,7 @@
+     //// to update the "conf" 4letter word
+     ////
+     protected InetSocketAddress clientPortAddress;
++    protected InetSocketAddress secureClientPortAddress;
+     protected File dataDir;
+     protected File dataLogDir;
+     protected int tickTime = ZooKeeperServer.DEFAULT_TICK_TIME;
+@@ -89,18 +90,22 @@ public void parse(String path) throws ConfigException {
+      * @param config
+      */
+     public void readFrom(QuorumPeerConfig config) {
+-      clientPortAddress = config.getClientPortAddress();
+-      dataDir = config.getDataDir();
+-      dataLogDir = config.getDataLogDir();
+-      tickTime = config.getTickTime();
+-      maxClientCnxns = config.getMaxClientCnxns();
+-      minSessionTimeout = config.getMinSessionTimeout();
+-      maxSessionTimeout = config.getMaxSessionTimeout();
++        clientPortAddress = config.getClientPortAddress();
++        secureClientPortAddress = config.getSecureClientPortAddress();
++        dataDir = config.getDataDir();
++        dataLogDir = config.getDataLogDir();
++        tickTime = config.getTickTime();
++        maxClientCnxns = config.getMaxClientCnxns();
++        minSessionTimeout = config.getMinSessionTimeout();
++        maxSessionTimeout = config.getMaxSessionTimeout();
+     }
+ 
+     public InetSocketAddress getClientPortAddress() {
+         return clientPortAddress;
+     }
++    public InetSocketAddress getSecureClientPortAddress() {
++        return secureClientPortAddress;
++    }
+     public File getDataDir() { return dataDir; }
+     public File getDataLogDir() { return dataLogDir; }
+     public int getTickTime() { return tickTime; }
+diff --git src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java
+index 9fb13c0..a2a8e30 100644
+--- src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java
++++ src/java/main/org/apache/zookeeper/server/ZooKeeperServer.java
+@@ -118,7 +118,8 @@
+     final HashMap<String, ChangeRecord> outstandingChangesForPath =
+         new HashMap<String, ChangeRecord>();
+ 
+-    private ServerCnxnFactory serverCnxnFactory;
++    protected ServerCnxnFactory serverCnxnFactory;
++    protected ServerCnxnFactory secureServerCnxnFactory;
+ 
+     private final ServerStats serverStats;
+     private final ZooKeeperServerListener listener = new ZooKeeperServerListenerImpl();
+@@ -177,6 +178,8 @@ public ServerStats serverStats() {
+     public void dumpConf(PrintWriter pwriter) {
+         pwriter.print("clientPort=");
+         pwriter.println(getClientPort());
++        pwriter.print("secureClientPort=");
++        pwriter.println(getSecureClientPort());
+         pwriter.print("dataDir=");
+         pwriter.println(zkDb.snapLog.getSnapDir().getAbsolutePath());
+         pwriter.print("dataLogDir=");
+@@ -184,7 +187,7 @@ public void dumpConf(PrintWriter pwriter) {
+         pwriter.print("tickTime=");
+         pwriter.println(getTickTime());
+         pwriter.print("maxClientCnxns=");
+-        pwriter.println(serverCnxnFactory.getMaxClientCnxnsPerHost());
++        pwriter.println(getMaxClientCnxnsPerHost());
+         pwriter.print("minSessionTimeout=");
+         pwriter.println(getMinSessionTimeout());
+         pwriter.print("maxSessionTimeout=");
+@@ -610,10 +613,14 @@ public void finishSessionInit(ServerCnxn cnxn, boolean valid) {
+         // register with JMX
+         try {
+             if (valid) {
+-                serverCnxnFactory.registerConnection(cnxn);
++                if (serverCnxnFactory != null && serverCnxnFactory.cnxns.contains(cnxn)) {
++                    serverCnxnFactory.registerConnection(cnxn);
++                } else if (secureServerCnxnFactory != null && secureServerCnxnFactory.cnxns.contains(cnxn)) {
++                    secureServerCnxnFactory.registerConnection(cnxn);
++                }
+             }
+         } catch (Exception e) {
+-                LOG.warn("Failed to register with JMX", e);
++            LOG.warn("Failed to register with JMX", e);
+         }
+ 
+         try {
+@@ -750,6 +757,10 @@ public ServerCnxnFactory getServerCnxnFactory() {
+         return serverCnxnFactory;
+     }
+ 
++    public void setSecureServerCnxnFactory(ServerCnxnFactory factory) {
++        secureServerCnxnFactory = factory;
++    }
++
+     /**
+      * return the last proceesed id from the
+      * datatree
+@@ -772,7 +783,17 @@ public long getOutstandingRequests() {
+      * to this server
+      */
+     public int getNumAliveConnections() {
+-        return serverCnxnFactory.getNumAliveConnections();
++        int numAliveConnections = 0;
++
++        if (serverCnxnFactory != null) {
++            numAliveConnections += serverCnxnFactory.getNumAliveConnections();
++        }
++
++        if (secureServerCnxnFactory != null) {
++            numAliveConnections += secureServerCnxnFactory.getNumAliveConnections();
++        }
++
++        return numAliveConnections;
+     }
+ 
+     /**
+@@ -817,6 +838,21 @@ public int getClientPort() {
+         return serverCnxnFactory != null ? serverCnxnFactory.getLocalPort() : -1;
+     }
+ 
++    public int getSecureClientPort() {
++        return secureServerCnxnFactory != null ? secureServerCnxnFactory.getLocalPort() : -1;
++    }
++
++    /** Maximum number of connections allowed from particular host (ip) */
++    public int getMaxClientCnxnsPerHost() {
++        if (serverCnxnFactory != null) {
++            return serverCnxnFactory.getMaxClientCnxnsPerHost();
++        }
++        if (secureServerCnxnFactory != null) {
++            return secureServerCnxnFactory.getMaxClientCnxnsPerHost();
++        }
++        return -1;
++    }
++
+     public void setTxnLogFactory(FileTxnSnapLog txnLog) {
+         this.txnLogFactory = txnLog;
+     }
+@@ -900,7 +936,12 @@ public void processConnectRequest(ServerCnxn cnxn, ByteBuffer incomingBuffer) th
+             LOG.info("Client attempting to renew session 0x"
+                     + Long.toHexString(clientSessionId)
+                     + " at " + cnxn.getRemoteSocketAddress());
+-            serverCnxnFactory.closeSession(sessionId);
++            if (serverCnxnFactory != null) {
++                serverCnxnFactory.closeSession(sessionId);
++            }
++            if (secureServerCnxnFactory != null) {
++                secureServerCnxnFactory.closeSession(sessionId);
++            }
+             cnxn.setSessionId(sessionId);
+             reopenSession(cnxn, sessionId, passwd, sessionTimeout);
+         }
+diff --git src/java/main/org/apache/zookeeper/server/ZooKeeperServerBean.java src/java/main/org/apache/zookeeper/server/ZooKeeperServerBean.java
+index 0eb5c7f..3a21b51 100644
+--- src/java/main/org/apache/zookeeper/server/ZooKeeperServerBean.java
++++ src/java/main/org/apache/zookeeper/server/ZooKeeperServerBean.java
+@@ -90,16 +90,16 @@ public void setTickTime(int tickTime) {
+     }
+ 
+     public int getMaxClientCnxnsPerHost() {
+-        ServerCnxnFactory fac = zks.getServerCnxnFactory();
+-        if (fac == null) {
+-            return -1;
+-        }
+-        return fac.getMaxClientCnxnsPerHost();
++        return zks.getMaxClientCnxnsPerHost();
+     }
+ 
+     public void setMaxClientCnxnsPerHost(int max) {
+-        // if fac is null the exception will be propagated to the client
+-        zks.getServerCnxnFactory().setMaxClientCnxnsPerHost(max);
++        if (zks.serverCnxnFactory != null) {
++            zks.serverCnxnFactory.setMaxClientCnxnsPerHost(max);
++        }
++        if (zks.secureServerCnxnFactory != null) {
++            zks.secureServerCnxnFactory.setMaxClientCnxnsPerHost(max);
++        }
+     }
+ 
+     public int getMinSessionTimeout() {
+diff --git src/java/main/org/apache/zookeeper/server/ZooKeeperServerMain.java src/java/main/org/apache/zookeeper/server/ZooKeeperServerMain.java
+index b756d34..63daea0 100644
+--- src/java/main/org/apache/zookeeper/server/ZooKeeperServerMain.java
++++ src/java/main/org/apache/zookeeper/server/ZooKeeperServerMain.java
+@@ -42,7 +42,9 @@
+     private static final String USAGE =
+         "Usage: ZooKeeperServerMain configfile | port datadir [ticktime] [maxcnxns]";
+ 
++    // ZooKeeper server supports two kinds of connection: unencrypted and encrypted.
+     private ServerCnxnFactory cnxnFactory;
++    private ServerCnxnFactory secureCnxnFactory;
+ 
+     private AdminServer adminServer;
+ 
+@@ -122,11 +124,27 @@ public void runFromConfig(ServerConfig config) throws IOException, AdminServerEx
+             adminServer.setZooKeeperServer(zkServer);
+             adminServer.start();
+ 
+-            cnxnFactory = ServerCnxnFactory.createFactory();
+-            cnxnFactory.configure(config.getClientPortAddress(),
+-                    config.getMaxClientCnxns());
+-            cnxnFactory.startup(zkServer);
+-            cnxnFactory.join();
++            boolean needStartZKServer = true;
++            if (config.getClientPortAddress() != null) {
++                cnxnFactory = ServerCnxnFactory.createFactory();
++                cnxnFactory.configure(config.getClientPortAddress(), config.getMaxClientCnxns(), false);
++                cnxnFactory.startup(zkServer);
++                // zkServer has been started. So we don't need to start it again in secureCnxnFactory.
++                needStartZKServer = false;
++            }
++            if (config.getSecureClientPortAddress() != null) {
++                secureCnxnFactory = ServerCnxnFactory.createFactory();
++                secureCnxnFactory.configure(config.getSecureClientPortAddress(), config.getMaxClientCnxns(), true);
++                secureCnxnFactory.startup(zkServer, needStartZKServer);
++            }
++
++            if (cnxnFactory != null) {
++                cnxnFactory.join();
++            }
++            if (secureCnxnFactory != null) {
++                secureCnxnFactory.join();
++            }
++
+             if (zkServer.isRunning()) {
+                 zkServer.shutdown();
+             }
+@@ -144,7 +162,12 @@ public void runFromConfig(ServerConfig config) throws IOException, AdminServerEx
+      * Shutdown the serving instance
+      */
+     protected void shutdown() {
+-        cnxnFactory.shutdown();
++        if (cnxnFactory != null) {
++            cnxnFactory.shutdown();
++        }
++        if (secureCnxnFactory != null) {
++            secureCnxnFactory.shutdown();
++        }
+         try {
+             adminServer.shutdown();
+         } catch (AdminServerException e) {
+diff --git src/java/main/org/apache/zookeeper/server/quorum/Leader.java src/java/main/org/apache/zookeeper/server/quorum/Leader.java
+index 9dc0424..1a95abd 100644
+--- src/java/main/org/apache/zookeeper/server/quorum/Leader.java
++++ src/java/main/org/apache/zookeeper/server/quorum/Leader.java
+@@ -532,7 +532,7 @@ void lead() throws IOException, InterruptedException {
+             }
+ 
+             if (!System.getProperty("zookeeper.leaderServes", "yes").equals("no")) {
+-                self.cnxnFactory.setZooKeeperServer(zk);
++                self.setZooKeeperServer(zk);
+             }
+ 
+             self.adminServer.setZooKeeperServer(zk);
+@@ -622,15 +622,14 @@ void shutdown(String reason) {
+         }
+ 
+         // NIO should not accept conenctions
+-        self.cnxnFactory.setZooKeeperServer(null);
++        self.setZooKeeperServer(null);
+         self.adminServer.setZooKeeperServer(null);
+         try {
+             ss.close();
+         } catch (IOException e) {
+             LOG.warn("Ignoring unexpected exception during close",e);
+         }
+-        // clear all the connections
+-        self.cnxnFactory.closeAll();
++        self.closeAllConnections();
+         // shutdown the previous zk
+         if (zk != null) {
+             zk.shutdown();
+diff --git src/java/main/org/apache/zookeeper/server/quorum/Learner.java src/java/main/org/apache/zookeeper/server/quorum/Learner.java
+index 9df0a5d..6630751 100644
+--- src/java/main/org/apache/zookeeper/server/quorum/Learner.java
++++ src/java/main/org/apache/zookeeper/server/quorum/Learner.java
+@@ -28,7 +28,6 @@
+ import java.net.InetSocketAddress;
+ import java.net.Socket;
+ import java.nio.ByteBuffer;
+-import java.util.HashMap;
+ import java.util.LinkedList;
+ import java.util.Map;
+ import java.util.Map.Entry;
+@@ -41,15 +40,11 @@
+ import org.apache.jute.Record;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+-import org.apache.zookeeper.KeeperException.NoNodeException;
+ import org.apache.zookeeper.ZooDefs.OpCode;
+-import org.apache.zookeeper.data.Stat;
+ import org.apache.zookeeper.server.Request;
+ import org.apache.zookeeper.server.ServerCnxn;
+ import org.apache.zookeeper.server.ZooTrace;
+-import org.apache.zookeeper.server.quorum.QuorumPeer.LearnerType;
+ import org.apache.zookeeper.server.quorum.QuorumPeer.QuorumServer;
+-import org.apache.zookeeper.server.quorum.QuorumPeer.ServerState;
+ import org.apache.zookeeper.server.quorum.flexible.QuorumVerifier;
+ import org.apache.zookeeper.server.util.SerializeUtils;
+ import org.apache.zookeeper.server.util.ZxidUtils;
+@@ -507,7 +502,7 @@ else if (qp.getType() == Leader.SNAP) {
+                        zk.takeSnapshot();
+                         self.setCurrentEpoch(newEpoch);
+                     }
+-                    self.cnxnFactory.setZooKeeperServer(zk);
++                    self.setZooKeeperServer(zk);
+                     self.adminServer.setZooKeeperServer(zk);
+                     break outerLoop;
+                 case Leader.NEWLEADER: // it will be NEWLEADER in v1.0        
+@@ -619,10 +614,8 @@ protected void ping(QuorumPacket qp) throws IOException {
+      * Shutdown the Peer
+      */
+     public void shutdown() {
+-        // set the zookeeper server to null
+-        self.cnxnFactory.setZooKeeperServer(null);
+-        // clear all the connections
+-        self.cnxnFactory.closeAll();
++        self.setZooKeeperServer(null);
++        self.closeAllConnections();
+         self.adminServer.setZooKeeperServer(null);
+         // shutdown previous zookeeper
+         if (zk != null) {
+diff --git src/java/main/org/apache/zookeeper/server/quorum/QuorumPeer.java src/java/main/org/apache/zookeeper/server/quorum/QuorumPeer.java
+index 04e84ee..732e8c1 100644
+--- src/java/main/org/apache/zookeeper/server/quorum/QuorumPeer.java
++++ src/java/main/org/apache/zookeeper/server/quorum/QuorumPeer.java
+@@ -44,7 +44,6 @@
+ import org.apache.zookeeper.common.AtomicFileWritingIdiom;
+ import org.apache.zookeeper.common.AtomicFileWritingIdiom.WriterStatement;
+ import org.apache.zookeeper.common.HostNameUtils;
+-import org.apache.zookeeper.common.PathUtils;
+ import org.apache.zookeeper.common.Time;
+ import org.apache.zookeeper.jmx.MBeanRegistry;
+ import org.apache.zookeeper.jmx.ZKMBeanInfo;
+@@ -99,7 +98,8 @@
+     LeaderElectionBean jmxLeaderElectionBean;
+     private QuorumCnxManager qcm;
+ 
+-    /* ZKDatabase is a top level member of quorumpeer
++    /**
++     * ZKDatabase is a top level member of quorumpeer
+      * which will be used in all the zookeeperservers
+      * instantiated later. Also, it is created once on
+      * bootup and only thrown away in case of a truncate
+@@ -557,6 +557,8 @@ public void setClientAddress(InetSocketAddress addr){
+     Election electionAlg;
+ 
+     ServerCnxnFactory cnxnFactory;
++    ServerCnxnFactory secureCnxnFactory;
++
+     private FileTxnSnapLog logFactory = null;
+ 
+     private final QuorumStats quorumStats;
+@@ -615,7 +617,7 @@ public synchronized void start() {
+             throw new RuntimeException("My id " + myid + " not in the peer list");
+          }
+         loadDataBase();
+-        cnxnFactory.start();
++        startServerCnxnFactory();
+         try {
+             adminServer.start();
+         } catch (AdminServerException e) {
+@@ -1035,7 +1037,7 @@ public void shutdown() {
+         if (follower != null) {
+             follower.shutdown();
+         }
+-        cnxnFactory.shutdown();
++        shutdownServerCnxnFactory();
+         if(udpSocket != null) {
+             udpSocket.close();
+         }
+@@ -1160,11 +1162,13 @@ public void setTickTime(int tickTime) {
+ 
+     /** Maximum number of connections allowed from particular host (ip) */
+     public int getMaxClientCnxnsPerHost() {
+-        ServerCnxnFactory fac = getCnxnFactory();
+-        if (fac == null) {
+-            return -1;
++        if (cnxnFactory != null) {
++            return cnxnFactory.getMaxClientCnxnsPerHost();
++        }
++        if (secureCnxnFactory != null) {
++            return secureCnxnFactory.getMaxClientCnxnsPerHost();
+         }
+-        return fac.getMaxClientCnxnsPerHost();
++        return -1;
+     }
+ 
+     /** Whether local sessions are enabled */
+@@ -1425,16 +1429,56 @@ public void setQuorumListenOnAllIPs(boolean quorumListenOnAllIPs) {
+         this.quorumListenOnAllIPs = quorumListenOnAllIPs;
+     }
+ 
+-    public ServerCnxnFactory getCnxnFactory() {
+-        return cnxnFactory;
+-    }
+-
+     public void setCnxnFactory(ServerCnxnFactory cnxnFactory) {
+         this.cnxnFactory = cnxnFactory;
+     }
+ 
++    public void setSecureCnxnFactory(ServerCnxnFactory secureCnxnFactory) {
++        this.secureCnxnFactory = secureCnxnFactory;
++    }
++
++    private void startServerCnxnFactory() {
++        if (cnxnFactory != null) {
++            cnxnFactory.start();
++        }
++        if (secureCnxnFactory != null) {
++            secureCnxnFactory.start();
++        }
++    }
++
++    private void shutdownServerCnxnFactory() {
++        if (cnxnFactory != null) {
++            cnxnFactory.shutdown();
++        }
++        if (secureCnxnFactory != null) {
++            secureCnxnFactory.shutdown();
++        }
++    }
++
++    // Leader and learner will control the zookeeper server and pass it into QuorumPeer.
++    public void setZooKeeperServer(ZooKeeperServer zks) {
++        if (cnxnFactory != null) {
++            cnxnFactory.setZooKeeperServer(zks);
++        }
++        if (secureCnxnFactory != null) {
++            secureCnxnFactory.setZooKeeperServer(zks);
++        }
++    }
++
++    public void closeAllConnections() {
++        if (cnxnFactory != null) {
++            cnxnFactory.closeAll();
++        }
++        if (secureCnxnFactory != null) {
++            secureCnxnFactory.closeAll();
++        }
++    }
++
+     public int getClientPort() {
+-        return cnxnFactory.getLocalPort();
++        if (cnxnFactory != null) {
++            return cnxnFactory.getLocalPort();
++        }
++        return -1;
+     }
+ 
+     public void setTxnFactory(FileTxnSnapLog factory) {
+@@ -1681,7 +1725,8 @@ protected void updateElectionVote(long newEpoch) {
+     }
+ 
+     private void updateThreadName() {
+-       setName("QuorumPeer" + "[myid=" + getId() + "]" +
+-               cnxnFactory.getLocalAddress());
++        String plain = cnxnFactory != null ? cnxnFactory.getLocalAddress().toString() : "disabled";
++        String secure = secureCnxnFactory != null ? secureCnxnFactory.getLocalAddress().toString() : "disabled";
++        setName(String.format("QuorumPeer[myid=%d](plain=%s)(secure=%s)", getId(), plain, secure));
+     }
+ }
+diff --git src/java/main/org/apache/zookeeper/server/quorum/QuorumPeerConfig.java src/java/main/org/apache/zookeeper/server/quorum/QuorumPeerConfig.java
+index badc8df..db61c77 100644
+--- src/java/main/org/apache/zookeeper/server/quorum/QuorumPeerConfig.java
++++ src/java/main/org/apache/zookeeper/server/quorum/QuorumPeerConfig.java
+@@ -60,6 +60,7 @@
+     private static boolean standaloneEnabled = true;
+ 
+     protected InetSocketAddress clientPortAddress;
++    protected InetSocketAddress secureClientPortAddress;
+     protected File dataDir;
+     protected File dataLogDir;
+     protected String dynamicConfigFileStr = null;
+@@ -214,7 +215,9 @@ public static String getVersionFromFilename(String filename) {
+     public void parseProperties(Properties zkProp)
+     throws IOException, ConfigException {
+         int clientPort = 0;
++        int secureClientPort = 0;
+         String clientPortAddress = null;
++        String secureClientPortAddress = null;
+         VerifyingFileFactory vff = new VerifyingFileFactory.Builder(LOG).warnForRelativePath().build();
+         for (Entry<Object, Object> entry : zkProp.entrySet()) {
+             String key = entry.getKey().toString().trim();
+@@ -231,6 +234,10 @@ public void parseProperties(Properties zkProp)
+                 localSessionsUpgradingEnabled = Boolean.parseBoolean(value);
+             } else if (key.equals("clientPortAddress")) {
+                 clientPortAddress = value.trim();
++            } else if (key.equals("secureClientPort")) {
++                secureClientPort = Integer.parseInt(value);
++            } else if (key.equals("secureClientPortAddress")){
++                secureClientPortAddress = value.trim();
+             } else if (key.equals("tickTime")) {
+                 tickTime = Integer.parseInt(value);
+             } else if (key.equals("maxClientCnxns")) {
+@@ -294,15 +301,35 @@ public void parseProperties(Properties zkProp)
+         if (dataLogDir == null) {
+             dataLogDir = dataDir;
+         }
+-        if (clientPortAddress != null) {
+-           if (clientPort == 0) {
+-               throw new IllegalArgumentException("clientPortAddress is set but clientPort is not set");
++
++        if (clientPort == 0) {
++            LOG.info("clientPort is not set");
++            if (this.clientPortAddress != null) {
++                throw new IllegalArgumentException("clientPortAddress is set but clientPort is not set");
++            }
++        } else if (clientPortAddress != null) {
++            this.clientPortAddress = new InetSocketAddress(
++                    InetAddress.getByName(clientPortAddress), clientPort);
++            LOG.info("clientPortAddress is {}", this.clientPortAddress.toString());
++        } else {
++            this.clientPortAddress = new InetSocketAddress(clientPort);
++            LOG.info("clientPortAddress is {}", this.clientPortAddress.toString());
++        }
++
++        if (secureClientPort == 0) {
++            LOG.info("secureClientPort is not set");
++            if (this.secureClientPortAddress != null) {
++                throw new IllegalArgumentException("clientPortAddress is set but clientPort is not set");
++            }
++        } else if (secureClientPortAddress != null) {
++            this.secureClientPortAddress = new InetSocketAddress(
++                    InetAddress.getByName(secureClientPortAddress), secureClientPort);
++            LOG.info("secureClientPortAddress is {}", this.secureClientPortAddress.toString());
++        } else {
++            this.secureClientPortAddress = new InetSocketAddress(secureClientPort);
++            LOG.info("secureClientPortAddress is {}", this.secureClientPortAddress.toString());
+         }
+-             this.clientPortAddress = new InetSocketAddress(
+-                      InetAddress.getByName(clientPortAddress), clientPort);
+-        } else if (clientPort!=0){
+-             this.clientPortAddress = new InetSocketAddress(clientPort);
+-        }    
++
+         if (tickTime == 0) {
+             throw new IllegalArgumentException("tickTime is not set");
+         }
+@@ -613,6 +640,7 @@ public void checkValidity() throws IOException, ConfigException{
+     }
+ 
+     public InetSocketAddress getClientPortAddress() { return clientPortAddress; }
++    public InetSocketAddress getSecureClientPortAddress() { return secureClientPortAddress; }
+     public File getDataDir() { return dataDir; }
+     public File getDataLogDir() { return dataLogDir; }
+     public int getTickTime() { return tickTime; }
+diff --git src/java/main/org/apache/zookeeper/server/quorum/QuorumPeerMain.java src/java/main/org/apache/zookeeper/server/quorum/QuorumPeerMain.java
+index d17c58d..bfe8588 100644
+--- src/java/main/org/apache/zookeeper/server/quorum/QuorumPeerMain.java
++++ src/java/main/org/apache/zookeeper/server/quorum/QuorumPeerMain.java
+@@ -135,9 +135,22 @@ public void runFromConfig(QuorumPeerConfig config) throws IOException, AdminServ
+ 
+       LOG.info("Starting quorum peer");
+       try {
+-          ServerCnxnFactory cnxnFactory = ServerCnxnFactory.createFactory();
+-          cnxnFactory.configure(config.getClientPortAddress(),
+-                                config.getMaxClientCnxns());
++          ServerCnxnFactory cnxnFactory = null;
++          ServerCnxnFactory secureCnxnFactory = null;
++
++          if (config.getClientPortAddress() != null) {
++              cnxnFactory = ServerCnxnFactory.createFactory();
++              cnxnFactory.configure(config.getClientPortAddress(),
++                      config.getMaxClientCnxns(),
++                      false);
++          }
++
++          if (config.getSecureClientPortAddress() != null) {
++              secureCnxnFactory = ServerCnxnFactory.createFactory();
++              secureCnxnFactory.configure(config.getSecureClientPortAddress(),
++                      config.getMaxClientCnxns(),
++                      true);
++          }
+ 
+           quorumPeer = new QuorumPeer();
+           quorumPeer.setTxnFactory(new FileTxnSnapLog(
+@@ -162,6 +175,7 @@ public void runFromConfig(QuorumPeerConfig config) throws IOException, AdminServ
+           }
+           quorumPeer.initConfigInZKDatabase();
+           quorumPeer.setCnxnFactory(cnxnFactory);
++          quorumPeer.setSecureCnxnFactory(secureCnxnFactory);
+           quorumPeer.setLearnerType(config.getPeerType());
+           quorumPeer.setSyncEnabled(config.getSyncEnabled());
+           quorumPeer.setQuorumListenOnAllIPs(config.getQuorumListenOnAllIPs());
+diff --git src/java/main/org/apache/zookeeper/server/quorum/ReadOnlyZooKeeperServer.java src/java/main/org/apache/zookeeper/server/quorum/ReadOnlyZooKeeperServer.java
+index cc32e3a..bd8754b 100644
+--- src/java/main/org/apache/zookeeper/server/quorum/ReadOnlyZooKeeperServer.java
++++ src/java/main/org/apache/zookeeper/server/quorum/ReadOnlyZooKeeperServer.java
+@@ -68,7 +68,7 @@ public synchronized void startup() {
+         }
+         registerJMX(new ReadOnlyBean(this), self.jmxLocalPeerBean);
+         super.startup();
+-        self.cnxnFactory.setZooKeeperServer(this);
++        self.setZooKeeperServer(this);
+         self.adminServer.setZooKeeperServer(this);
+         LOG.info("Read-only server started");
+     }
+@@ -145,9 +145,9 @@ public synchronized void shutdown() {
+         unregisterJMX(this);
+ 
+         // set peer's server to null
+-        self.cnxnFactory.setZooKeeperServer(null);
++        self.setZooKeeperServer(null);
+         // clear all the connections
+-        self.cnxnFactory.closeAll();
++        self.closeAllConnections();
+ 
+         self.adminServer.setZooKeeperServer(null);
+ 
+diff --git src/java/test/data/ssl/README.md src/java/test/data/ssl/README.md
+new file mode 100644
+index 0000000..b8823d8
+--- /dev/null
++++ src/java/test/data/ssl/README.md
+@@ -0,0 +1,10 @@
++SSL test data
++===================
++
++testKeyStore.jks
++---
++Testing keystore, password is "testpass".
++
++testTrustStore.jks
++---
++Testing truststore, password is "testpass".
+diff --git src/java/test/data/ssl/testKeyStore.jks src/java/test/data/ssl/testKeyStore.jks
+new file mode 100644
+index 0000000..40a7d0b
+Binary files /dev/null and src/java/test/data/ssl/testKeyStore.jks differ
+diff --git src/java/test/data/ssl/testTrustStore.jks src/java/test/data/ssl/testTrustStore.jks
+new file mode 100644
+index 0000000..33f09c1
+Binary files /dev/null and src/java/test/data/ssl/testTrustStore.jks differ
+diff --git src/java/test/org/apache/zookeeper/server/quorum/QuorumPeerTestBase.java src/java/test/org/apache/zookeeper/server/quorum/QuorumPeerTestBase.java
+index 6ab19b1..3eaa3e3 100644
+--- src/java/test/org/apache/zookeeper/server/quorum/QuorumPeerTestBase.java
++++ src/java/test/org/apache/zookeeper/server/quorum/QuorumPeerTestBase.java
+@@ -22,13 +22,10 @@
+ package org.apache.zookeeper.server.quorum;
+ 
+ import java.io.File;
+-import java.io.FileNotFoundException;
+ import java.io.FileReader;
+ import java.io.FileWriter;
+ import java.io.FilenameFilter;
+ import java.io.IOException;
+-import java.util.ArrayList;
+-import java.util.List;
+ import java.util.Properties;
+ 
+ import org.slf4j.Logger;
+@@ -49,6 +46,8 @@
+     protected static final Logger LOG = LoggerFactory
+             .getLogger(QuorumPeerTestBase.class);
+ 
++    public static final int TIMEOUT = 3000;
++
+     public void process(WatchedEvent event) {
+         // ignore for this test
+     }
+@@ -76,6 +75,12 @@ public MainThread(int myid, String quorumCfgSection) throws IOException {
+             this(myid, quorumCfgSection, true);
+         }
+ 
++        public MainThread(int myid, String quorumCfgSection, Integer secureClientPort, boolean writeDynamicConfigFile)
++                throws  IOException {
++            this(myid, UNSET_STATIC_CLIENTPORT, JettyAdminServer.DEFAULT_PORT, secureClientPort,
++                    quorumCfgSection, null, writeDynamicConfigFile, null);
++        }
++
+         public MainThread(int myid, String quorumCfgSection, boolean writeDynamicConfigFile)
+                 throws IOException {
+             this(myid, UNSET_STATIC_CLIENTPORT, quorumCfgSection, writeDynamicConfigFile);
+@@ -114,7 +119,12 @@ public MainThread(int myid, int clientPort, int adminServerPort, String quorumCf
+         }
+ 
+         public MainThread(int myid, int clientPort, int adminServerPort, String quorumCfgSection,
+-                          String configs, boolean writeDynamicConfigFile, String version)
++                          String configs, boolean writeDynamicConfigFile, String version) throws IOException {
++            this(myid, clientPort, adminServerPort, null, quorumCfgSection, configs, writeDynamicConfigFile, version);
++        }
++
++        public MainThread(int myid, int clientPort, int adminServerPort, Integer secureClientPort,
++                          String quorumCfgSection, String configs, boolean writeDynamicConfigFile, String version)
+                 throws IOException {
+             tmpDir = ClientBase.createTmpDir();
+             LOG.info("id = " + myid + " tmpDir = " + tmpDir + " clientPort = "
+@@ -148,6 +158,10 @@ public MainThread(int myid, int clientPort, int adminServerPort, String quorumCf
+                 fwriter.write("clientPort=" + clientPort + "\n");
+             }
+ 
++            if (secureClientPort != null) {
++                fwriter.write("secureClientPort=" + secureClientPort + "\n");
++            }
++
+             if (writeDynamicConfigFile) {
+                 String dynamicConfigFilename = createDynamicFile(quorumCfgSection, version);
+                 fwriter.write("dynamicConfigFile=" + dynamicConfigFilename + "\n");
+diff --git src/java/test/org/apache/zookeeper/server/quorum/Zab1_0Test.java src/java/test/org/apache/zookeeper/server/quorum/Zab1_0Test.java
+index 6ce058e..7cb303d 100644
+--- src/java/test/org/apache/zookeeper/server/quorum/Zab1_0Test.java
++++ src/java/test/org/apache/zookeeper/server/quorum/Zab1_0Test.java
+@@ -275,8 +275,8 @@ public void testLeaderInElectingFollowers() throws Exception {
+     }
+ 
+     private static final class NullServerCnxnFactory extends ServerCnxnFactory {
+-        public void startup(ZooKeeperServer zkServer) throws IOException,
+-                InterruptedException {
++        public void startup(ZooKeeperServer zkServer, boolean startServer)
++                throws IOException, InterruptedException {
+         }
+         public void start() {
+         }
+@@ -298,10 +298,12 @@ public InetSocketAddress getLocalAddress() {
+         public Iterable<ServerCnxn> getConnections() {
+             return null;
+         }
+-        public void configure(InetSocketAddress addr, int maxClientCnxns)
++        public void configure(InetSocketAddress addr, int maxcc, boolean secure)
+                 throws IOException {
+         }
+-        public void closeSession(long sessionId) {
++
++        public boolean closeSession(long sessionId) {
++            return false;
+         }
+         public void closeAll() {
+         }
+diff --git src/java/test/org/apache/zookeeper/test/ReconfigTest.java src/java/test/org/apache/zookeeper/test/ReconfigTest.java
+index d797a49..0db5dee 100644
+--- src/java/test/org/apache/zookeeper/test/ReconfigTest.java
++++ src/java/test/org/apache/zookeeper/test/ReconfigTest.java
+@@ -580,8 +580,7 @@ public void testPortChange() throws Exception {
+ 
+         testNormalOperation(zkArr[followerIndex], zkArr[leaderIndex]);
+         testServerHasConfig(zkArr[followerIndex], joiningServers, null);
+-        Assert.assertTrue(qu.getPeer(followerIndex).peer.getName()
+-                .endsWith(String.format(":%d", newClientPort)));
++        Assert.assertEquals(newClientPort, qu.getPeer(followerIndex).peer.getClientPort());
+ 
+         joiningServers.clear();
+ 
+diff --git src/java/test/org/apache/zookeeper/test/SSLTest.java src/java/test/org/apache/zookeeper/test/SSLTest.java
+new file mode 100644
+index 0000000..1131751
+--- /dev/null
++++ src/java/test/org/apache/zookeeper/test/SSLTest.java
+@@ -0,0 +1,159 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ * <p/>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p/>
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/**
++ *
++ */
++package org.apache.zookeeper.test;
++
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.TimeUnit;
++
++import org.apache.zookeeper.CreateMode;
++import org.apache.zookeeper.PortAssignment;
++import org.apache.zookeeper.WatchedEvent;
++import org.apache.zookeeper.Watcher;
++import org.apache.zookeeper.ZooDefs;
++import org.apache.zookeeper.ZooKeeper;
++import org.apache.zookeeper.common.X509Util;
++import org.apache.zookeeper.server.ServerCnxnFactory;
++import org.apache.zookeeper.server.quorum.QuorumPeerTestBase;
++import org.junit.After;
++import org.junit.Assert;
++import org.junit.Before;
++import org.junit.Test;
++
++public class SSLTest extends QuorumPeerTestBase {
++
++    @Before
++    public void setup() {
++        String testDataPath = System.getProperty("test.data.dir", "build/test/data");
++        System.setProperty(ServerCnxnFactory.ZOOKEEPER_SERVER_CNXN_FACTORY, "org.apache.zookeeper.server.NettyServerCnxnFactory");
++        System.setProperty(ZooKeeper.ZOOKEEPER_CLIENT_CNXN_SOCKET, "org.apache.zookeeper.ClientCnxnSocketNetty");
++        System.setProperty(ZooKeeper.SECURE_CLIENT, "true");
++        System.setProperty(X509Util.SSL_KEYSTORE_LOCATION, testDataPath + "/ssl/testKeyStore.jks");
++        System.setProperty(X509Util.SSL_KEYSTORE_PASSWD, "testpass");
++        System.setProperty(X509Util.SSL_TRUSTSTORE_LOCATION, testDataPath + "/ssl/testTrustStore.jks");
++        System.setProperty(X509Util.SSL_TRUSTSTORE_PASSWD, "testpass");
++    }
++
++    @After
++    public void teardown() throws Exception {
++        System.clearProperty(ServerCnxnFactory.ZOOKEEPER_SERVER_CNXN_FACTORY);
++        System.clearProperty(ZooKeeper.ZOOKEEPER_CLIENT_CNXN_SOCKET);
++        System.clearProperty(ZooKeeper.SECURE_CLIENT);
++        System.clearProperty(X509Util.SSL_KEYSTORE_LOCATION);
++        System.clearProperty(X509Util.SSL_KEYSTORE_PASSWD);
++        System.clearProperty(X509Util.SSL_TRUSTSTORE_LOCATION);
++        System.clearProperty(X509Util.SSL_TRUSTSTORE_PASSWD);
++    }
++
++    /**
++     * This test checks that SSL works in cluster setup of ZK servers, which includes:
++     * 1. setting "secureClientPort" in "zoo.cfg" file.
++     * 2. setting jvm flags for serverCnxn, keystore, truststore.
++     * Finally, a zookeeper client should be able to connect to the secure port and
++     * communicate with server via secure connection.
++     * <p/>
++     * Note that in this test a ZK server has two ports -- clientPort and secureClientPort.
++     */
++    @Test
++    public void testSecureQuorumServer() throws Exception {
++        final int SERVER_COUNT = 3;
++        final int clientPorts[] = new int[SERVER_COUNT];
++        final Integer secureClientPorts[] = new Integer[SERVER_COUNT];
++        StringBuilder sb = new StringBuilder();
++        for (int i = 0; i < SERVER_COUNT; i++) {
++            clientPorts[i] = PortAssignment.unique();
++            secureClientPorts[i] = PortAssignment.unique();
++            String server = String.format("server.%d=localhost:%d:%d:participant;localhost:%d",
++                    i, PortAssignment.unique(), PortAssignment.unique(), clientPorts[i]);
++            sb.append(server + "\n");
++        }
++        String quorumCfg = sb.toString();
++
++
++        MainThread[] mt = new MainThread[SERVER_COUNT];
++        for (int i = 0; i < SERVER_COUNT; i++) {
++            mt[i] = new MainThread(i, quorumCfg, secureClientPorts[i], true);
++            mt[i].start();
++        }
++
++        // Servers have been set up. Now go test if secure connection is successful.
++        for (int i = 0; i < SERVER_COUNT; i++) {
++            Assert.assertTrue("waiting for server " + i + " being up",
++                    ClientBase.waitForServerUp("127.0.0.1:" + clientPorts[i], TIMEOUT));
++
++            final CountDownLatch latch = new CountDownLatch(1);
++            ZooKeeper zk = new ZooKeeper("127.0.0.1:" + secureClientPorts[i], TIMEOUT,
++                    new Watcher() {
++                        @Override
++                        public void process(WatchedEvent event) {
++                            if (event.getState() != Event.KeeperState.SyncConnected) {
++                                Assert.fail("failed to connect to ZK server secure client port");
++                            }
++                            latch.countDown();
++                        }
++                    });
++            if (!latch.await(TIMEOUT, TimeUnit.MILLISECONDS)) {
++                Assert.fail("Timeout connecting to ZK server secure port");
++            }
++            // Do a simple operation to make sure the connection is fine.
++            zk.create("/test", "".getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
++            zk.delete("/test", -1);
++            zk.close();
++        }
++
++        for (int i = 0; i < mt.length; i++) {
++            mt[i].shutdown();
++        }
++    }
++
++
++    /**
++     * Developers might use standalone mode (which is the default for one server).
++     * This test checks SSL works in standalone mode of ZK server.
++     * <p/>
++     * Note that in this test the Zk server has only secureClientPort
++     */
++    @Test
++    public void testSecureStandaloneServer() throws Exception {
++        Integer secureClientPort = PortAssignment.unique();
++        MainThread mt = new MainThread(MainThread.UNSET_MYID, "", secureClientPort, false);
++        mt.start();
++
++        final CountDownLatch latch = new CountDownLatch(1);
++        ZooKeeper zk = new ZooKeeper("127.0.0.1:" + secureClientPort, TIMEOUT,
++                new Watcher() {
++                    @Override
++                    public void process(WatchedEvent event) {
++                        if (event.getState() != Event.KeeperState.SyncConnected) {
++                            Assert.fail("failed to connect to ZK server secure client port");
++                        }
++                        latch.countDown();
++                    }
++                });
++        if (!latch.await(TIMEOUT, TimeUnit.MILLISECONDS)) {
++            Assert.fail("Timeout connecting to ZK server secure port");
++        }
++        zk.create("/test", "".getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
++        zk.delete("/test", -1);
++        zk.close();
++        mt.shutdown();
++    }
++}

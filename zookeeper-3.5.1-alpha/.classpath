@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<classpath>
+  <classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER" />
+  <classpathentry kind="src" path="src/java/main" output=".eclipse/classes-main" />
+  <classpathentry kind="src" path="src/java/generated" output=".eclipse/classes-main" />
+  <classpathentry kind="src" path="src/java/test" output=".eclipse/classes-test" />
+  <classpathentry kind="src" path="src/java/systest" output=".eclipse/classes-test" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/jline/jline/jars/jline-2.11.jar" exported="true" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/org.mortbay.jetty/jetty/jars/jetty-6.1.26.jar" exported="true" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/org.mortbay.jetty/jetty-util/jars/jetty-util-6.1.26.jar" exported="true" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/org.mortbay.jetty/servlet-api/jars/servlet-api-2.5-20081211.jar" exported="true" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/org.codehaus.jackson/jackson-mapper-asl/jars/jackson-mapper-asl-1.9.11.jar" exported="true" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/org.codehaus.jackson/jackson-core-asl/jars/jackson-core-asl-1.9.11.jar" exported="true" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/org.slf4j/slf4j-api/jars/slf4j-api-1.7.5.jar" exported="true" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/org.slf4j/slf4j-log4j12/jars/slf4j-log4j12-1.7.5.jar" exported="true" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/commons-cli/commons-cli/jars/commons-cli-1.2.jar" exported="true" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/log4j/log4j/bundles/log4j-1.2.16.jar" exported="true" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/io.netty/netty/jars/netty-3.7.0.Final.jar" exported="true" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/net.java.dev.javacc/javacc/jars/javacc-5.0.jar" exported="true" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/junit/junit/jars/junit-4.12.jar" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/org.mockito/mockito-all/jars/mockito-all-1.8.2.jar" />
+  <classpathentry kind="lib" path="/home/brenner/.ant/cache/checkstyle/checkstyle/jars/checkstyle-5.0.jar" />
+  <classpathentry kind="output" path=".eclipse/classes-main" />
+</classpath>

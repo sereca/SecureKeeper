@@ -1,0 +1,7 @@
+tickTime=2000
+dataDir=/tmp/zookeeper
+clientPort=2181
+secureClientPort=2281
+initLimit=10
+syncLimit=5
+dynamicConfigFile=conf/zoo.cfg.dynamic.100000000

@@ -1,0 +1,18 @@
+/* Enclave.edl - Top EDL file. */
+
+enclave {
+   
+  from "sgx_tstdc.edl" import *;
+    
+	include "sgx_tcrypto.h"
+	include "../../prog/zpp/utils.h" 
+  
+	untrusted {
+		void ocall_print([in, string] const char *str);
+	};
+
+	trusted {
+		public int ecall_get_sequential_path([in, out, size=buffer_size] char * path, size_t path_len, size_t buffer_size, int id);
+	};
+
+};

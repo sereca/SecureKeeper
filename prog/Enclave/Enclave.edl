@@ -1,0 +1,19 @@
+/* Enclave.edl - Top EDL file. */
+
+enclave {
+   
+  from "sgx_tstdc.edl" import *;
+    
+	include "sgx_tcrypto.h"
+	include "../zpp/utils.h" 
+  
+	untrusted {
+		void ocall_print([in, string] const char *str);
+	};
+
+	trusted {
+		public size_t ecall_handle_input_from_zookeeper([in, out, size=buffersize] char * pack, size_t psize, size_t buffersize, int id);
+		public size_t ecall_handle_input_from_client([in, out, size=buffersize] char * pack, size_t psize, size_t buffersize, int id);
+	};
+
+};
